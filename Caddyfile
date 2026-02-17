@@ -1,4 +1,4 @@
-www.heniiii.cc, heniiii.cc {
+www.heniiii.cc {
     handle /api/* {
         reverse_proxy backend:8000
     }
