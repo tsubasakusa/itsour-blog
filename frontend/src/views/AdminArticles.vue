@@ -1,5 +1,14 @@
 <template>
   <div class="admin-articles">
+    <!-- 讀取中 -->
+    <div v-if="loading" class="loading-overlay">
+      <div class="loading-box">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">LOADING...</p>
+      </div>
+    </div>
+
+    <template v-else>
     <!-- 儀錶板 -->
     <div class="dashboard">
       <div class="stat-card">
@@ -25,14 +34,30 @@
 
     <!-- 文章管理 -->
     <div class="article-management">
-      <button @click="showForm = true" class="create-btn">+ 新增文章</button>
+      <button @click="openCreateForm" class="create-btn">+ 新增文章</button>
 
       <!-- 創建/編輯表單 -->
-      <div v-if="showForm" class="form-modal">
+      <div v-if="showForm" class="form-modal" @click.self="cancelForm" @keydown.esc="cancelForm">
         <div class="form-content">
-          <h3>{{ editingId ? '編輯文章' : '新增文章' }}</h3>
-          <input v-model="form.title" placeholder="標題" />
-          <input v-model="form.summary" placeholder="摘要（選填）" />
+          <div class="form-header">
+            <h3>{{ editingId ? '編輯文章' : '新增文章' }}</h3>
+            <button @click="cancelForm" class="close-btn" title="取消">&times;</button>
+          </div>
+
+          <!-- 標題 -->
+          <div class="field-group" :class="{ 'field-error': validationErrors.title }">
+            <input v-model="form.title" placeholder="標題（必填）" />
+            <span v-if="validationErrors.title" class="error-msg">{{ validationErrors.title }}</span>
+          </div>
+
+          <!-- 摘要 + AI 按鈕 -->
+          <div class="summary-field">
+            <input v-model="form.summary" placeholder="摘要（留空自動擷取）" />
+            <button @click="generateSummary" class="ai-btn" :disabled="generatingSummary || !form.content" title="AI 生成摘要">
+              {{ generatingSummary ? '...' : 'AI' }}
+            </button>
+          </div>
+
           <div class="form-row">
             <select v-model="form.category_id">
               <option :value="null">-- 選擇分類 --</option>
@@ -40,16 +65,50 @@
             </select>
             <input v-model="tagInput" placeholder="標籤（逗號分隔）" />
           </div>
+
           <TipTapEditor v-model="form.content" />
+
           <div class="form-row">
             <label><input type="checkbox" v-model="form.is_published" /> 發布</label>
             <label><input type="checkbox" v-model="form.featured" /> 精選</label>
           </div>
-          <input type="file" @change="handleFiles" multiple accept="image/*" />
-          <div class="form-actions">
-            <button @click="saveArticle" class="save-btn">儲存</button>
-            <button @click="cancelForm" class="cancel-btn">取消</button>
+
+          <!-- 文章附圖管理 -->
+          <div class="images-section">
+            <div class="images-header">
+              <span class="images-label">文章附圖</span>
+            </div>
+            <!-- 已有的圖片（編輯時） -->
+            <div v-if="existingImages.length" class="preview-grid">
+              <div v-for="img in existingImages" :key="'existing-' + img.id" class="preview-item">
+                <img :src="getImageUrl(img.thumbnail_path || img.filepath)" :alt="img.alt_text || img.filename" />
+                <button @click="deleteExistingImage(img.id)" class="preview-remove" title="刪除">&times;</button>
+                <span class="preview-name">{{ img.filename }}</span>
+              </div>
+            </div>
+            <!-- 新選擇的圖片 -->
+            <div v-if="previews.length" class="preview-grid">
+              <div v-for="(p, i) in previews" :key="'new-' + i" class="preview-item preview-new">
+                <img :src="p.url" :alt="p.name" />
+                <button @click="removeFile(i)" class="preview-remove" title="移除">&times;</button>
+                <span class="preview-name">{{ p.name }}</span>
+                <span class="preview-badge-new">NEW</span>
+              </div>
+            </div>
+            <button @click="triggerFileInput" class="upload-images-btn">+ 上傳圖片</button>
+            <input type="file" ref="fileInputRef" @change="handleFiles" multiple accept="image/*" hidden />
           </div>
+
+          <!-- 儲存操作 -->
+          <div class="form-actions">
+            <button @click="saveArticle" class="save-btn" :disabled="saving">
+              {{ saving ? '儲存中...' : '儲存' }}
+            </button>
+            <button @click="cancelForm" class="cancel-btn" :disabled="saving">取消</button>
+          </div>
+
+          <!-- 儲存訊息 -->
+          <p v-if="saveMessage" :class="['save-msg', saveMessageType]">{{ saveMessage }}</p>
         </div>
       </div>
 
@@ -64,23 +123,27 @@
             <span class="reading-time">{{ article.reading_time || 1 }} 分鐘</span>
           </div>
           <div class="article-actions">
-            <button @click="editArticle(article)" class="edit-btn">編輯</button>
+            <button @click="editArticle(article)" class="edit-btn" :disabled="loadingArticleId === article.id">
+              {{ loadingArticleId === article.id ? '載入中...' : '編輯' }}
+            </button>
             <button @click="deleteArticle(article.id)" class="delete-btn">刪除</button>
           </div>
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
 <script>
-import { ref, onMounted } from 'vue'
-import { articleAPI, categoryAPI } from '../api'
+import { ref, onMounted, onUnmounted } from 'vue'
+import { articleAPI, categoryAPI, mediaAPI, aiAPI } from '../api'
 import TipTapEditor from '../components/TipTapEditor.vue'
 
 export default {
   components: { TipTapEditor },
   setup() {
+    const loading = ref(true)
     const stats = ref({ total_articles: 0, published_articles: 0, draft_articles: 0, total_views: 0 })
     const articles = ref([])
     const categories = ref([])
@@ -89,6 +152,15 @@ export default {
     const message = ref('')
     const tagInput = ref('')
     const selectedFiles = ref([])
+    const previews = ref([])
+    const fileInputRef = ref(null)
+    const saving = ref(false)
+    const saveMessage = ref('')
+    const saveMessageType = ref('success')
+    const loadingArticleId = ref(null)
+    const existingImages = ref([])
+    const validationErrors = ref({})
+    const generatingSummary = ref(false)
 
     const form = ref({
       title: '',
@@ -99,6 +171,14 @@ export default {
       featured: false
     })
 
+    const getImageUrl = (path) => {
+      if (!path) return ''
+      return `/uploads/${path.replace(/^uploads\//, '')}`
+    }
+
+    const stripHtml = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+
+    // === Data Loading ===
     const loadStats = async () => {
       try {
         const res = await articleAPI.getStats()
@@ -128,48 +208,151 @@ export default {
 
     const reindex = async () => {
       message.value = '索引中...'
-      const res = await articleAPI.reindex()
-      message.value = res.data.message
+      try {
+        const res = await articleAPI.reindex()
+        message.value = res.data.message
+      } catch (e) {
+        message.value = '索引失敗'
+      }
       setTimeout(() => message.value = '', 3000)
     }
 
-    const handleFiles = (e) => {
-      selectedFiles.value = Array.from(e.target.files)
+    // === Form ===
+    const openCreateForm = () => {
+      cancelForm()
+      showForm.value = true
     }
 
-    const saveArticle = async () => {
-      const data = {
-        ...form.value,
-        tag_names: tagInput.value.split(',').map(t => t.trim()).filter(t => t)
+    const validate = () => {
+      validationErrors.value = {}
+      if (!form.value.title.trim()) {
+        validationErrors.value.title = '請輸入標題'
       }
+      return Object.keys(validationErrors.value).length === 0
+    }
 
-      if (editingId.value) {
-        await articleAPI.update(editingId.value, data)
-      } else {
-        const res = await articleAPI.create(data)
-        const articleId = res.data.id
+    // === Image Handling ===
+    const triggerFileInput = () => {
+      fileInputRef.value?.click()
+    }
+
+    const handleFiles = (e) => {
+      const files = Array.from(e.target.files)
+      for (const file of files) {
+        selectedFiles.value.push(file)
+        previews.value.push({ url: URL.createObjectURL(file), name: file.name })
+      }
+      if (fileInputRef.value) fileInputRef.value.value = ''
+    }
+
+    const removeFile = (index) => {
+      URL.revokeObjectURL(previews.value[index].url)
+      previews.value.splice(index, 1)
+      selectedFiles.value.splice(index, 1)
+    }
+
+    const deleteExistingImage = async (imageId) => {
+      if (!confirm('確定刪除此圖片？')) return
+      try {
+        await mediaAPI.delete(imageId)
+        existingImages.value = existingImages.value.filter(img => img.id !== imageId)
+      } catch (e) {
+        console.error('Failed to delete image', e)
+      }
+    }
+
+    // === Save ===
+    const saveArticle = async () => {
+      if (!validate()) return
+      if (saving.value) return
+      saving.value = true
+      saveMessage.value = ''
+
+      try {
+        // Auto-generate summary if empty
+        const summary = form.value.summary.trim()
+          || stripHtml(form.value.content).substring(0, 150)
+          || ''
+
+        const data = {
+          ...form.value,
+          summary,
+          tag_names: tagInput.value.split(',').map(t => t.trim()).filter(t => t)
+        }
+
+        let articleId = editingId.value
+
+        if (editingId.value) {
+          await articleAPI.update(editingId.value, data)
+        } else {
+          const res = await articleAPI.create(data)
+          articleId = res.data.id
+        }
+
+        // Upload new images (both create and edit)
         for (const file of selectedFiles.value) {
           await articleAPI.uploadImage(articleId, file)
         }
-      }
 
-      cancelForm()
-      loadArticles()
-      loadStats()
+        saveMessage.value = '儲存成功'
+        saveMessageType.value = 'success'
+        setTimeout(() => {
+          cancelForm()
+          loadArticles()
+          loadStats()
+        }, 600)
+      } catch (e) {
+        console.error('Save failed', e)
+        saveMessage.value = e.response?.data?.detail || '儲存失敗，請重試'
+        saveMessageType.value = 'error'
+        saving.value = false
+      }
     }
 
-    const editArticle = (article) => {
-      editingId.value = article.id
-      form.value = {
-        title: article.title,
-        content: article.content || '',
-        summary: article.summary || '',
-        category_id: article.category_id || null,
-        is_published: article.is_published,
-        featured: article.featured,
+    // === AI Summary ===
+    const generateSummary = async () => {
+      if (!form.value.content || generatingSummary.value) return
+      generatingSummary.value = true
+      try {
+        const text = stripHtml(form.value.content)
+        const res = await aiAPI.generateSummary(text, form.value.title)
+        if (res.data.summary) {
+          form.value.summary = res.data.summary
+        }
+      } catch (e) {
+        const detail = e.response?.data?.detail || 'AI 生成失敗'
+        saveMessage.value = detail
+        saveMessageType.value = 'error'
+        setTimeout(() => saveMessage.value = '', 3000)
+      } finally {
+        generatingSummary.value = false
       }
-      tagInput.value = (article.tags || []).map(t => t.name).join(', ')
-      showForm.value = true
+    }
+
+    // === Edit ===
+    const editArticle = async (article) => {
+      if (loadingArticleId.value) return
+      loadingArticleId.value = article.id
+      try {
+        const res = await articleAPI.getOne(article.id)
+        const full = res.data
+        editingId.value = full.id
+        form.value = {
+          title: full.title,
+          content: full.content || '',
+          summary: full.summary || '',
+          category_id: full.category_id || null,
+          is_published: full.is_published,
+          featured: full.featured,
+        }
+        tagInput.value = (full.tags || []).map(t => t.name).join(', ')
+        existingImages.value = full.images || []
+        showForm.value = true
+      } catch (e) {
+        console.error('Failed to load article', e)
+      } finally {
+        loadingArticleId.value = null
+      }
     }
 
     const deleteArticle = async (id) => {
@@ -185,24 +368,80 @@ export default {
       editingId.value = null
       form.value = { title: '', content: '', summary: '', category_id: null, is_published: true, featured: false }
       tagInput.value = ''
+      previews.value.forEach(p => URL.revokeObjectURL(p.url))
+      previews.value = []
       selectedFiles.value = []
+      existingImages.value = []
+      saving.value = false
+      saveMessage.value = ''
+      validationErrors.value = {}
     }
 
-    onMounted(() => {
-      loadStats()
-      loadArticles()
-      loadCategories()
+    // === Esc key handler ===
+    const handleEsc = (e) => {
+      if (e.key === 'Escape' && showForm.value) {
+        cancelForm()
+      }
+    }
+
+    onMounted(async () => {
+      document.addEventListener('keydown', handleEsc)
+      try {
+        await Promise.all([loadStats(), loadArticles(), loadCategories()])
+      } finally {
+        loading.value = false
+      }
+    })
+
+    onUnmounted(() => {
+      document.removeEventListener('keydown', handleEsc)
     })
 
     return {
-      stats, articles, categories, showForm, form, editingId, message, tagInput,
-      reindex, saveArticle, editArticle, deleteArticle, cancelForm, handleFiles, getCategoryName,
+      loading, stats, articles, categories, showForm, form, editingId, message, tagInput,
+      previews, fileInputRef, saving, saveMessage, saveMessageType,
+      loadingArticleId, existingImages, validationErrors, generatingSummary,
+      reindex, openCreateForm, saveArticle, editArticle, deleteArticle, cancelForm,
+      handleFiles, removeFile, triggerFileInput, deleteExistingImage,
+      getCategoryName, getImageUrl, generateSummary,
     }
   }
 }
 </script>
 
 <style scoped>
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.loading-box {
+  text-align: center;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #000;
+  border-top-color: #FFC107;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  letter-spacing: 3px;
+  color: #000;
+}
+
 .dashboard {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -277,9 +516,97 @@ export default {
   overflow-y: auto;
 }
 
-.form-content h3 { margin-bottom: 20px; font-size: 24px; }
+.form-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
 
-.form-content input,
+.form-header h3 { font-size: 24px; }
+
+.close-btn {
+  background: none;
+  border: 2px solid #000;
+  font-size: 28px;
+  line-height: 1;
+  width: 40px;
+  height: 40px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Courier New', monospace;
+  transition: all 0.2s;
+}
+
+.close-btn:hover {
+  background: #000;
+  color: #FFC107;
+}
+
+/* Field validation */
+.field-group {
+  margin-bottom: 15px;
+}
+
+.field-group input {
+  width: 100%;
+  padding: 10px;
+  border: 2px solid #000;
+  font-family: inherit;
+}
+
+.field-error input {
+  border-color: #f44336;
+  background: #fff5f5;
+}
+
+.error-msg {
+  display: block;
+  color: #f44336;
+  font-size: 12px;
+  font-family: 'Courier New', monospace;
+  margin-top: 4px;
+}
+
+/* Summary + AI button */
+.summary-field {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 15px;
+}
+
+.summary-field input {
+  flex: 1;
+  padding: 10px;
+  border: 2px solid #000;
+  font-family: inherit;
+}
+
+.ai-btn {
+  padding: 10px 16px;
+  background: #000;
+  color: #FFC107;
+  border: 2px solid #FFC107;
+  font-family: 'Courier New', monospace;
+  font-weight: bold;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.ai-btn:hover:not(:disabled) {
+  background: #FFC107;
+  color: #000;
+}
+
+.ai-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .form-content select {
   width: 100%;
   padding: 10px;
@@ -295,7 +622,13 @@ export default {
 }
 
 .form-row select,
-.form-row input { flex: 1; margin-bottom: 0; }
+.form-row input {
+  flex: 1;
+  margin-bottom: 0;
+  padding: 10px;
+  border: 2px solid #000;
+  font-family: inherit;
+}
 
 .form-content label {
   display: inline-flex;
@@ -305,6 +638,115 @@ export default {
   font-family: 'Courier New', monospace;
 }
 
+/* Images Section */
+.images-section {
+  margin-top: 15px;
+  padding: 15px;
+  border: 2px dashed #999;
+  background: #fff;
+}
+
+.images-header {
+  margin-bottom: 10px;
+}
+
+.images-label {
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.upload-images-btn {
+  padding: 8px 16px;
+  background: #fff;
+  border: 2px solid #000;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.upload-images-btn:hover {
+  background: #FFC107;
+}
+
+.preview-grid {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.preview-item {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  border: 2px solid #000;
+  overflow: hidden;
+}
+
+.preview-new {
+  border-color: #4caf50;
+}
+
+.preview-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.preview-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  background: #000;
+  color: #FFC107;
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.preview-remove:hover {
+  background: #f44336;
+  color: #fff;
+}
+
+.preview-name {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  font-size: 9px;
+  font-family: 'Courier New', monospace;
+  padding: 2px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-badge-new {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: #4caf50;
+  color: #fff;
+  font-size: 8px;
+  font-family: 'Courier New', monospace;
+  padding: 1px 4px;
+  font-weight: bold;
+}
+
+/* Save actions */
 .form-actions {
   display: flex;
   gap: 10px;
@@ -320,6 +762,11 @@ export default {
   font-family: 'Courier New', monospace;
 }
 
+.save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .cancel-btn {
   padding: 10px 20px;
   background: #ccc;
@@ -327,6 +774,26 @@ export default {
   cursor: pointer;
 }
 
+.cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.save-msg {
+  margin-top: 12px;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.save-msg.success {
+  color: #4caf50;
+}
+
+.save-msg.error {
+  color: #f44336;
+}
+
+/* Article table */
 .article-table { margin-top: 30px; }
 
 .article-row {
@@ -384,6 +851,11 @@ export default {
   color: #FFC107;
   border: none;
   cursor: pointer;
+}
+
+.edit-btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 .delete-btn {

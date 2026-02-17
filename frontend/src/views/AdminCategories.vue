@@ -1,5 +1,13 @@
 <template>
   <div class="admin-categories">
+    <div v-if="loading" class="loading-overlay">
+      <div class="loading-box">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">LOADING...</p>
+      </div>
+    </div>
+
+    <template v-else>
     <div class="cat-form">
       <input v-model="catForm.name" placeholder="分類名稱" />
       <input v-model="catForm.description" placeholder="描述（選填）" />
@@ -18,6 +26,7 @@
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -27,6 +36,7 @@ import { categoryAPI } from '../api'
 
 export default {
   setup() {
+    const loading = ref(true)
     const categories = ref([])
     const editingCatId = ref(null)
     const catForm = ref({ name: '', description: '', color: '#FFC107' })
@@ -65,12 +75,16 @@ export default {
       catForm.value = { name: '', description: '', color: '#FFC107' }
     }
 
-    onMounted(() => {
-      loadCategories()
+    onMounted(async () => {
+      try {
+        await loadCategories()
+      } finally {
+        loading.value = false
+      }
     })
 
     return {
-      categories, catForm, editingCatId,
+      loading, categories, catForm, editingCatId,
       saveCategory, editCategory, deleteCategory, cancelCatForm,
     }
   }
@@ -78,6 +92,38 @@ export default {
 </script>
 
 <style scoped>
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.loading-box {
+  text-align: center;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #000;
+  border-top-color: #FFC107;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  letter-spacing: 3px;
+  color: #000;
+}
+
 .cat-form {
   display: flex;
   gap: 10px;

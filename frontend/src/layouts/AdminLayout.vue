@@ -8,6 +8,7 @@
         <router-link to="/plague" exact-active-class="active" class="nav-item">文章管理</router-link>
         <router-link to="/plague/categories" active-class="active" class="nav-item">分類管理</router-link>
         <router-link to="/plague/media" active-class="active" class="nav-item">媒體庫</router-link>
+        <router-link to="/plague/settings" active-class="active" class="nav-item">設定</router-link>
         <router-link to="/" class="nav-item nav-home">首頁</router-link>
         <a href="#" @click.prevent="handleLogout" class="nav-item nav-logout">登出</a>
       </nav>

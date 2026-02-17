@@ -1,5 +1,13 @@
 <template>
   <div class="media-library">
+    <div v-if="loading" class="loading-overlay">
+      <div class="loading-box">
+        <div class="loading-spinner"></div>
+        <p class="loading-text">LOADING...</p>
+      </div>
+    </div>
+
+    <template v-else>
     <h3 class="section-title">[ MEDIA_LIBRARY ]</h3>
 
     <!-- Upload Area -->
@@ -41,6 +49,7 @@
     </div>
 
     <p v-if="!images.length" class="empty">尚無圖片</p>
+    </template>
   </div>
 </template>
 
@@ -50,6 +59,7 @@ import { mediaAPI } from '../api'
 
 export default {
   setup() {
+    const loading = ref(true)
     const images = ref([])
     const dragOver = ref(false)
     const uploadStatus = ref('')
@@ -113,14 +123,52 @@ export default {
       setTimeout(() => uploadStatus.value = '', 2000)
     }
 
-    onMounted(loadImages)
+    onMounted(async () => {
+      try {
+        await loadImages()
+      } finally {
+        loading.value = false
+      }
+    })
 
-    return { images, dragOver, uploadStatus, selectedIds, getImageUrl, handleFileSelect, handleDrop, toggleSelect, deleteSelected, copyUrl, loadImages }
+    return { loading, images, dragOver, uploadStatus, selectedIds, getImageUrl, handleFileSelect, handleDrop, toggleSelect, deleteSelected, copyUrl, loadImages }
   }
 }
 </script>
 
 <style scoped>
+.loading-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+}
+
+.loading-box {
+  text-align: center;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #000;
+  border-top-color: #FFC107;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-text {
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+  letter-spacing: 3px;
+  color: #000;
+}
+
 .section-title {
   font-family: 'Courier New', monospace;
   font-size: 22px;

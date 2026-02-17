@@ -140,6 +140,7 @@ class ArticleListResponse(BaseModel):
     author: str
     category_id: Optional[int] = None
     category: Optional[CategoryResponse] = None
+    is_published: bool
     view_count: int
     featured: bool
     reading_time: Optional[int] = 1

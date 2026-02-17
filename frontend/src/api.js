@@ -77,3 +77,12 @@ export const mediaAPI = {
   getOne: (id) => api.get(`/media/${id}`),
   delete: (id) => api.delete(`/media/${id}`),
 }
+
+export const aiAPI = {
+  generateSummary: (content, title) => api.post('/ai/generate-summary', { content, title }),
+}
+
+export const settingsAPI = {
+  getAll: () => api.get('/settings/'),
+  update: (settings) => api.put('/settings/', settings),
+}

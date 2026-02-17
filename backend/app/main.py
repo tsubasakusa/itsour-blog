@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from .database import engine, Base
 from .routes import router, category_router, media_router
 from .auth_routes import router as auth_router
+from .ai_routes import router as ai_router, settings_router
 from .search import ensure_index
 from pathlib import Path
 
@@ -32,6 +33,8 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.include_router(auth_router)
 app.include_router(category_router)
 app.include_router(media_router)
+app.include_router(ai_router)
+app.include_router(settings_router)
 app.include_router(router)
 
 # Initialize Elasticsearch index

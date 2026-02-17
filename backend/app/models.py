@@ -68,3 +68,10 @@ class Tag(Base):
     color = Column(String(7), default="#667eea")
 
     articles = relationship("Article", secondary=article_tags, back_populates="tags")
+
+class SiteSetting(Base):
+    __tablename__ = "site_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(100), unique=True, nullable=False, index=True)
+    value = Column(Text, default="")

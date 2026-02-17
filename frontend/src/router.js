@@ -44,6 +44,11 @@ const routes = [
         name: 'admin-media',
         component: () => import('./views/AdminMedia.vue'),
       },
+      {
+        path: 'settings',
+        name: 'admin-settings',
+        component: () => import('./views/AdminSettings.vue'),
+      },
     ],
   },
 ]
