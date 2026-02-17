@@ -1,7 +1,5 @@
 <template>
-  <div class="admin-panel">
-    <h2 class="section-title">[ ADMIN_PANEL ]</h2>
-    
+  <div class="admin-articles">
     <!-- 儀錶板 -->
     <div class="dashboard">
       <div class="stat-card">
@@ -22,7 +20,7 @@
       </div>
     </div>
 
-    <button @click="reindex" class="action-btn">🔄 重新索引 Elasticsearch</button>
+    <button @click="reindex" class="action-btn">重新索引 Elasticsearch</button>
     <p v-if="message" class="message">{{ message }}</p>
 
     <!-- 文章管理 -->
@@ -34,12 +32,19 @@
         <div class="form-content">
           <h3>{{ editingId ? '編輯文章' : '新增文章' }}</h3>
           <input v-model="form.title" placeholder="標題" />
-          <textarea v-model="form.content" placeholder="內容" rows="8"></textarea>
           <input v-model="form.summary" placeholder="摘要（選填）" />
-          <input v-model="form.category" placeholder="分類 (如: Python, Docker)" />
-          <input v-model="tagInput" placeholder="標籤（逗號分隔）" />
-          <label><input type="checkbox" v-model="form.is_published" /> 發布</label>
-          <label><input type="checkbox" v-model="form.featured" /> 精選</label>
+          <div class="form-row">
+            <select v-model="form.category_id">
+              <option :value="null">-- 選擇分類 --</option>
+              <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+            </select>
+            <input v-model="tagInput" placeholder="標籤（逗號分隔）" />
+          </div>
+          <TipTapEditor v-model="form.content" />
+          <div class="form-row">
+            <label><input type="checkbox" v-model="form.is_published" /> 發布</label>
+            <label><input type="checkbox" v-model="form.featured" /> 精選</label>
+          </div>
           <input type="file" @change="handleFiles" multiple accept="image/*" />
           <div class="form-actions">
             <button @click="saveArticle" class="save-btn">儲存</button>
@@ -53,9 +58,10 @@
         <div v-for="article in articles" :key="article.id" class="article-row">
           <div class="article-info">
             <h4>{{ article.title }}</h4>
-            <span class="badge">{{ article.category || 'MISC' }}</span>
+            <span class="badge">{{ getCategoryName(article.category_id) || 'MISC' }}</span>
             <span v-if="!article.is_published" class="draft-badge">草稿</span>
             <span v-if="article.featured" class="featured-badge">精選</span>
+            <span class="reading-time">{{ article.reading_time || 1 }} 分鐘</span>
           </div>
           <div class="article-actions">
             <button @click="editArticle(article)" class="edit-btn">編輯</button>
@@ -69,35 +75,55 @@
 
 <script>
 import { ref, onMounted } from 'vue'
-import { articleAPI } from '../api'
+import { articleAPI, categoryAPI } from '../api'
+import TipTapEditor from '../components/TipTapEditor.vue'
 
 export default {
+  components: { TipTapEditor },
   setup() {
     const stats = ref({ total_articles: 0, published_articles: 0, draft_articles: 0, total_views: 0 })
     const articles = ref([])
+    const categories = ref([])
     const showForm = ref(false)
     const editingId = ref(null)
     const message = ref('')
     const tagInput = ref('')
     const selectedFiles = ref([])
-    
+
     const form = ref({
       title: '',
       content: '',
       summary: '',
-      category: '',
+      category_id: null,
       is_published: true,
       featured: false
     })
 
     const loadStats = async () => {
-      const res = await articleAPI.getStats()
-      stats.value = res.data
+      try {
+        const res = await articleAPI.getStats()
+        stats.value = res.data
+      } catch (e) { console.error(e) }
     }
 
     const loadArticles = async () => {
-      const res = await articleAPI.getAll({ published_only: false })
-      articles.value = res.data
+      try {
+        const res = await articleAPI.getAll({ published_only: false })
+        articles.value = res.data
+      } catch (e) { console.error(e) }
+    }
+
+    const loadCategories = async () => {
+      try {
+        const res = await categoryAPI.getAll()
+        categories.value = res.data
+      } catch (e) { console.error(e) }
+    }
+
+    const getCategoryName = (catId) => {
+      if (!catId) return null
+      const cat = categories.value.find(c => c.id === catId)
+      return cat ? cat.name : null
     }
 
     const reindex = async () => {
@@ -122,7 +148,6 @@ export default {
       } else {
         const res = await articleAPI.create(data)
         const articleId = res.data.id
-        
         for (const file of selectedFiles.value) {
           await articleAPI.uploadImage(articleId, file)
         }
@@ -135,8 +160,15 @@ export default {
 
     const editArticle = (article) => {
       editingId.value = article.id
-      form.value = { ...article }
-      tagInput.value = article.tags.map(t => t.name).join(', ')
+      form.value = {
+        title: article.title,
+        content: article.content || '',
+        summary: article.summary || '',
+        category_id: article.category_id || null,
+        is_published: article.is_published,
+        featured: article.featured,
+      }
+      tagInput.value = (article.tags || []).map(t => t.name).join(', ')
       showForm.value = true
     }
 
@@ -151,7 +183,7 @@ export default {
     const cancelForm = () => {
       showForm.value = false
       editingId.value = null
-      form.value = { title: '', content: '', summary: '', category: '', is_published: true, featured: false }
+      form.value = { title: '', content: '', summary: '', category_id: null, is_published: true, featured: false }
       tagInput.value = ''
       selectedFiles.value = []
     }
@@ -159,23 +191,18 @@ export default {
     onMounted(() => {
       loadStats()
       loadArticles()
+      loadCategories()
     })
 
-    return { stats, articles, showForm, form, editingId, message, tagInput, reindex, saveArticle, editArticle, deleteArticle, cancelForm, handleFiles }
+    return {
+      stats, articles, categories, showForm, form, editingId, message, tagInput,
+      reindex, saveArticle, editArticle, deleteArticle, cancelForm, handleFiles, getCategoryName,
+    }
   }
 }
 </script>
 
 <style scoped>
-.section-title {
-  font-family: 'Courier New', monospace;
-  font-size: 28px;
-  margin-bottom: 30px;
-  letter-spacing: 3px;
-  border-left: 6px solid #000;
-  padding-left: 15px;
-}
-
 .dashboard {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -192,10 +219,7 @@ export default {
   box-shadow: 5px 5px 0 #FFC107;
 }
 
-.stat-card h3 {
-  font-size: 48px;
-  margin-bottom: 10px;
-}
+.stat-card h3 { font-size: 48px; margin-bottom: 10px; }
 
 .action-btn {
   padding: 12px 24px;
@@ -247,19 +271,16 @@ export default {
   background: #FFFBEA;
   padding: 40px;
   border: 6px solid #000;
-  max-width: 600px;
-  width: 90%;
-  max-height: 90vh;
+  max-width: 800px;
+  width: 95%;
+  max-height: 95vh;
   overflow-y: auto;
 }
 
-.form-content h3 {
-  margin-bottom: 20px;
-  font-size: 24px;
-}
+.form-content h3 { margin-bottom: 20px; font-size: 24px; }
 
 .form-content input,
-.form-content textarea {
+.form-content select {
   width: 100%;
   padding: 10px;
   margin-bottom: 15px;
@@ -267,9 +288,20 @@ export default {
   font-family: inherit;
 }
 
+.form-row {
+  display: flex;
+  gap: 15px;
+  margin-bottom: 15px;
+}
+
+.form-row select,
+.form-row input { flex: 1; margin-bottom: 0; }
+
 .form-content label {
-  display: block;
-  margin-bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 15px;
   font-family: 'Courier New', monospace;
 }
 
@@ -285,6 +317,7 @@ export default {
   color: #FFC107;
   border: none;
   cursor: pointer;
+  font-family: 'Courier New', monospace;
 }
 
 .cancel-btn {
@@ -294,9 +327,7 @@ export default {
   cursor: pointer;
 }
 
-.article-table {
-  margin-top: 30px;
-}
+.article-table { margin-top: 30px; }
 
 .article-row {
   display: flex;
@@ -308,9 +339,7 @@ export default {
   background: #fff;
 }
 
-.article-info h4 {
-  margin-bottom: 10px;
-}
+.article-info h4 { margin-bottom: 10px; }
 
 .badge {
   display: inline-block;
@@ -338,12 +367,16 @@ export default {
   color: #FFC107;
   font-size: 11px;
   font-family: 'Courier New', monospace;
+  margin-right: 5px;
 }
 
-.article-actions {
-  display: flex;
-  gap: 10px;
+.reading-time {
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  color: #666;
 }
+
+.article-actions { display: flex; gap: 10px; }
 
 .edit-btn {
   padding: 8px 16px;

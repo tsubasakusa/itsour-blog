@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from .database import engine, Base
-from .routes import router
+from .routes import router, category_router, media_router
 from .auth_routes import router as auth_router
+from .search import ensure_index
 from pathlib import Path
 
 Base.metadata.create_all(bind=engine)
@@ -22,11 +23,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Path("uploads").mkdir(exist_ok=True)
+# Create upload directories
+for d in ["uploads", "uploads/original", "uploads/medium", "uploads/thumbnail"]:
+    Path(d).mkdir(parents=True, exist_ok=True)
+
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.include_router(auth_router)
+app.include_router(category_router)
+app.include_router(media_router)
 app.include_router(router)
+
+# Initialize Elasticsearch index
+ensure_index()
 
 @app.get("/")
 def read_root():

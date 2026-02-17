@@ -19,7 +19,9 @@ api.interceptors.response.use(
   error => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')
-      window.location.reload()
+      if (window.location.pathname.startsWith('/plague')) {
+        window.location.href = '/plague/login'
+      }
     }
     return Promise.reject(error)
   }
@@ -36,6 +38,7 @@ export const authAPI = {
 export const articleAPI = {
   getAll: (params = {}) => api.get('/articles/', { params }),
   getOne: (id) => api.get(`/articles/${id}`),
+  getBySlug: (slug) => api.get(`/articles/by-slug/${slug}`),
   create: (data) => api.post('/articles/', data),
   update: (id, data) => api.put(`/articles/${id}`, data),
   delete: (id) => api.delete(`/articles/${id}`),
@@ -44,6 +47,7 @@ export const articleAPI = {
   reindex: () => api.post('/articles/management/reindex'),
   getTags: () => api.get('/articles/tags/all'),
   getCategories: () => api.get('/articles/categories/all'),
+  getRelated: (id) => api.get(`/articles/${id}/related`),
   uploadImage: (id, file) => {
     const formData = new FormData()
     formData.append('file', file)
@@ -51,4 +55,25 @@ export const articleAPI = {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
   }
+}
+
+export const categoryAPI = {
+  getAll: () => api.get('/categories/'),
+  create: (data) => api.post('/categories/', data),
+  update: (id, data) => api.put(`/categories/${id}`, data),
+  delete: (id) => api.delete(`/categories/${id}`),
+}
+
+export const mediaAPI = {
+  upload: (file, altText) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (altText) formData.append('alt_text', altText)
+    return api.post('/media/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+  getAll: (params = {}) => api.get('/media/', { params }),
+  getOne: (id) => api.get(`/media/${id}`),
+  delete: (id) => api.delete(`/media/${id}`),
 }

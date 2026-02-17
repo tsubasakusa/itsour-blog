@@ -8,18 +8,18 @@
         <button type="submit">登入</button>
         <p v-if="error" class="error">{{ error }}</p>
       </form>
-      <p class="hint">預設：admin / admin123</p>
     </div>
   </div>
 </template>
 
 <script>
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { authAPI } from '../api'
 
 export default {
-  emits: ['login-success'],
-  setup(props, { emit }) {
+  setup() {
+    const router = useRouter()
     const username = ref('')
     const password = ref('')
     const error = ref('')
@@ -29,7 +29,7 @@ export default {
         error.value = ''
         const res = await authAPI.login(username.value, password.value)
         localStorage.setItem('token', res.data.access_token)
-        emit('login-success')
+        router.push('/plague')
       } catch (err) {
         error.value = err.response?.data?.detail || '登入失敗'
       }
