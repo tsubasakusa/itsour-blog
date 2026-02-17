@@ -12,7 +12,11 @@ app = FastAPI(title="Itsour Blog API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://www.heniiii.cc",
+        "https://heniiii.cc",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

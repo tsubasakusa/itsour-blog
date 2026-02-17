@@ -16,7 +16,7 @@
     <nav class="nav">
       <a href="#" @click.prevent="view='home'" :class="{active: view==='home'}">首頁_HOME</a>
       <a href="#" @click.prevent="goToAdmin" :class="{active: view==='admin'}">管理_ADMIN</a>
-      <a href="http://localhost:8000/docs" target="_blank">API_DOCS</a>
+      <a href="/docs" target="_blank">API_DOCS</a>
       <a v-if="isLoggedIn" href="#" @click.prevent="handleLogout" class="logout">登出_LOGOUT</a>
     </nav>
 

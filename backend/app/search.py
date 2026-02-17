@@ -1,7 +1,7 @@
 from elasticsearch import Elasticsearch
 import os
 
-es_url = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
+es_url = os.getenv("ELASTICSEARCH_URL", "http://elasticsearch:9200")
 es = Elasticsearch([es_url])
 
 def index_article(article_id: int, title: str, content: str, author: str = None, category: str = None):
