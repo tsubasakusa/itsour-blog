@@ -170,6 +170,7 @@ class ArticleListResponse(BaseModel):
                 "author": data.author,
                 "category_id": data.category_id,
                 "category": data.category_rel,
+                "is_published": data.is_published,
                 "view_count": data.view_count,
                 "featured": data.featured,
                 "reading_time": data.reading_time,
