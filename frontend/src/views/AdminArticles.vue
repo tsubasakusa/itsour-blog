@@ -37,11 +37,23 @@
       <button @click="openCreateForm" class="create-btn">+ 新增文章</button>
 
       <!-- 創建/編輯表單 -->
-      <div v-if="showForm" class="form-modal" @click.self="cancelForm" @keydown.esc="cancelForm">
+      <div v-if="showForm" class="form-modal" @click.self="tryCancel" @keydown.esc="tryCancel">
         <div class="form-content">
           <div class="form-header">
             <h3>{{ editingId ? '編輯文章' : '新增文章' }}</h3>
-            <button @click="cancelForm" class="close-btn" title="取消">&times;</button>
+            <span class="autosave-status" :class="autosaveStatus">
+              <template v-if="autosaveStatus === 'saving'">儲存中...</template>
+              <template v-else-if="autosaveStatus === 'saved'">已自動儲存 {{ lastSavedAtText }}</template>
+              <template v-else-if="autosaveStatus === 'error'">自動儲存失敗</template>
+            </span>
+            <button @click="tryCancel" class="close-btn" title="取消">&times;</button>
+          </div>
+
+          <!-- 草稿還原提示 -->
+          <div v-if="draftPrompt" class="draft-prompt">
+            <span>偵測到未儲存的草稿（{{ draftPromptTime }}），是否還原？</span>
+            <button @click="restoreDraft" class="draft-btn restore">還原</button>
+            <button @click="ignoreDraft" class="draft-btn ignore">忽略</button>
           </div>
 
           <!-- 標題 -->
@@ -136,7 +148,7 @@
 </template>
 
 <script>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { articleAPI, categoryAPI, mediaAPI, aiAPI } from '../api'
 import TipTapEditor from '../components/TipTapEditor.vue'
 
@@ -162,6 +174,24 @@ export default {
     const validationErrors = ref({})
     const generatingSummary = ref(false)
 
+    // === Autosave State ===
+    const autosaveStatus = ref('idle') // 'idle' | 'saving' | 'saved' | 'error'
+    const lastSavedAt = ref(null)
+    const draftPrompt = ref(false)
+    const draftPromptTime = ref('')
+    const pendingDraft = ref(null)
+    const initialFormSnapshot = ref(null)
+    const initialTagSnapshot = ref('')
+    const serverUpdatedAt = ref(null)
+    let autosaveTimer = null
+    let autosaveEnabled = false
+
+    const lastSavedAtText = computed(() => {
+      if (!lastSavedAt.value) return ''
+      const d = new Date(lastSavedAt.value)
+      return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0')
+    })
+
     const form = ref({
       title: '',
       content: '',
@@ -177,6 +207,146 @@ export default {
     }
 
     const stripHtml = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
+
+    // === Draft localStorage Helpers ===
+    const getDraftKey = () => editingId.value ? `draft_article_${editingId.value}` : 'draft_article_new'
+
+    const saveDraftToLocal = () => {
+      try {
+        localStorage.setItem(getDraftKey(), JSON.stringify({
+          data: { ...form.value, tags: tagInput.value },
+          savedAt: new Date().toISOString()
+        }))
+      } catch (e) { /* localStorage full or unavailable */ }
+    }
+
+    const loadDraftFromLocal = (key) => {
+      try {
+        const raw = localStorage.getItem(key)
+        return raw ? JSON.parse(raw) : null
+      } catch (e) { return null }
+    }
+
+    const clearDraftFromLocal = () => {
+      try { localStorage.removeItem(getDraftKey()) } catch (e) { /* ignore */ }
+    }
+
+    const cleanExpiredDrafts = () => {
+      const now = Date.now()
+      const maxAge = 24 * 60 * 60 * 1000
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i)
+          if (key && key.startsWith('draft_article_')) {
+            const draft = loadDraftFromLocal(key)
+            if (draft && draft.savedAt && (now - new Date(draft.savedAt).getTime() > maxAge)) {
+              localStorage.removeItem(key)
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    const hasFormChanged = () => {
+      if (!initialFormSnapshot.value) return false
+      const snap = initialFormSnapshot.value
+      const f = form.value
+      return f.title !== snap.title ||
+        f.content !== snap.content ||
+        f.summary !== snap.summary ||
+        f.category_id !== snap.category_id ||
+        f.is_published !== snap.is_published ||
+        f.featured !== snap.featured ||
+        tagInput.value !== initialTagSnapshot.value
+    }
+
+    const takeSnapshot = () => {
+      initialFormSnapshot.value = JSON.parse(JSON.stringify(form.value))
+      initialTagSnapshot.value = tagInput.value
+    }
+
+    // === Autosave Logic ===
+    const performAutosave = async () => {
+      // Always save to localStorage
+      saveDraftToLocal()
+
+      // If editing an existing article, also save to server
+      if (editingId.value) {
+        autosaveStatus.value = 'saving'
+        try {
+          const summary = form.value.summary.trim()
+            || stripHtml(form.value.content).substring(0, 150)
+            || ''
+          const data = {
+            ...form.value,
+            summary,
+            tag_names: tagInput.value.split(',').map(t => t.trim()).filter(t => t)
+          }
+          await articleAPI.update(editingId.value, data)
+          autosaveStatus.value = 'saved'
+          lastSavedAt.value = new Date().toISOString()
+        } catch (e) {
+          autosaveStatus.value = 'error'
+        }
+      } else {
+        autosaveStatus.value = 'saved'
+        lastSavedAt.value = new Date().toISOString()
+      }
+    }
+
+    const scheduleDebouncedAutosave = () => {
+      if (!autosaveEnabled || !showForm.value) return
+      clearTimeout(autosaveTimer)
+      autosaveTimer = setTimeout(performAutosave, 3000)
+    }
+
+    const cancelAutosaveTimer = () => {
+      clearTimeout(autosaveTimer)
+      autosaveTimer = null
+    }
+
+    // === Draft Restore ===
+    const checkForDraft = (articleUpdatedAt) => {
+      const key = getDraftKey()
+      const draft = loadDraftFromLocal(key)
+      if (!draft || !draft.data) return
+
+      const savedTime = new Date(draft.savedAt)
+      // For new articles, always prompt; for existing, only if draft is newer
+      if (editingId.value && articleUpdatedAt) {
+        const serverTime = new Date(articleUpdatedAt)
+        if (savedTime <= serverTime) {
+          localStorage.removeItem(key)
+          return
+        }
+      }
+
+      pendingDraft.value = draft
+      draftPromptTime.value = savedTime.getHours().toString().padStart(2, '0') + ':' + savedTime.getMinutes().toString().padStart(2, '0')
+      draftPrompt.value = true
+    }
+
+    const restoreDraft = () => {
+      if (pendingDraft.value && pendingDraft.value.data) {
+        const d = pendingDraft.value.data
+        form.value.title = d.title || ''
+        form.value.content = d.content || ''
+        form.value.summary = d.summary || ''
+        form.value.category_id = d.category_id ?? null
+        form.value.is_published = d.is_published ?? true
+        form.value.featured = d.featured ?? false
+        if (d.tags !== undefined) tagInput.value = d.tags
+        takeSnapshot()
+      }
+      draftPrompt.value = false
+      pendingDraft.value = null
+    }
+
+    const ignoreDraft = () => {
+      clearDraftFromLocal()
+      draftPrompt.value = false
+      pendingDraft.value = null
+    }
 
     // === Data Loading ===
     const loadStats = async () => {
@@ -219,8 +389,12 @@ export default {
 
     // === Form ===
     const openCreateForm = () => {
-      cancelForm()
+      resetFormState()
       showForm.value = true
+      cleanExpiredDrafts()
+      takeSnapshot()
+      autosaveEnabled = true
+      checkForDraft(null)
     }
 
     const validate = () => {
@@ -265,6 +439,7 @@ export default {
     const saveArticle = async () => {
       if (!validate()) return
       if (saving.value) return
+      cancelAutosaveTimer()
       saving.value = true
       saveMessage.value = ''
 
@@ -294,10 +469,11 @@ export default {
           await articleAPI.uploadImage(articleId, file)
         }
 
+        clearDraftFromLocal()
         saveMessage.value = '儲存成功'
         saveMessageType.value = 'success'
         setTimeout(() => {
-          cancelForm()
+          resetFormState()
           loadArticles()
           loadStats()
         }, 600)
@@ -336,7 +512,9 @@ export default {
       try {
         const res = await articleAPI.getOne(article.id)
         const full = res.data
+        resetFormState()
         editingId.value = full.id
+        serverUpdatedAt.value = full.updated_at || null
         form.value = {
           title: full.title,
           content: full.content || '',
@@ -348,6 +526,10 @@ export default {
         tagInput.value = (full.tags || []).map(t => t.name).join(', ')
         existingImages.value = full.images || []
         showForm.value = true
+        cleanExpiredDrafts()
+        takeSnapshot()
+        autosaveEnabled = true
+        checkForDraft(full.updated_at)
       } catch (e) {
         console.error('Failed to load article', e)
       } finally {
@@ -363,7 +545,9 @@ export default {
       }
     }
 
-    const cancelForm = () => {
+    const resetFormState = () => {
+      cancelAutosaveTimer()
+      autosaveEnabled = false
       showForm.value = false
       editingId.value = null
       form.value = { title: '', content: '', summary: '', category_id: null, is_published: true, featured: false }
@@ -375,14 +559,39 @@ export default {
       saving.value = false
       saveMessage.value = ''
       validationErrors.value = {}
+      autosaveStatus.value = 'idle'
+      lastSavedAt.value = null
+      draftPrompt.value = false
+      pendingDraft.value = null
+      initialFormSnapshot.value = null
+      initialTagSnapshot.value = ''
+      serverUpdatedAt.value = null
     }
+
+    const tryCancel = () => {
+      if (hasFormChanged()) {
+        if (!confirm('有未儲存的變更，確定離開？')) return
+      }
+      resetFormState()
+    }
+
+    // Keep cancelForm as alias for backwards compat in template
+    const cancelForm = resetFormState
 
     // === Esc key handler ===
     const handleEsc = (e) => {
       if (e.key === 'Escape' && showForm.value) {
-        cancelForm()
+        tryCancel()
       }
     }
+
+    // === Autosave Watch ===
+    watch(
+      [() => form.value.title, () => form.value.content, () => form.value.summary,
+       () => form.value.category_id, () => form.value.is_published, () => form.value.featured,
+       tagInput],
+      () => { scheduleDebouncedAutosave() }
+    )
 
     onMounted(async () => {
       document.addEventListener('keydown', handleEsc)
@@ -395,13 +604,16 @@ export default {
 
     onUnmounted(() => {
       document.removeEventListener('keydown', handleEsc)
+      cancelAutosaveTimer()
     })
 
     return {
       loading, stats, articles, categories, showForm, form, editingId, message, tagInput,
       previews, fileInputRef, saving, saveMessage, saveMessageType,
       loadingArticleId, existingImages, validationErrors, generatingSummary,
-      reindex, openCreateForm, saveArticle, editArticle, deleteArticle, cancelForm,
+      autosaveStatus, lastSavedAtText, draftPrompt, draftPromptTime,
+      reindex, openCreateForm, saveArticle, editArticle, deleteArticle,
+      cancelForm, tryCancel, restoreDraft, ignoreDraft,
       handleFiles, removeFile, triggerFileInput, deleteExistingImage,
       getCategoryName, getImageUrl, generateSummary,
     }
@@ -523,7 +735,57 @@ export default {
   margin-bottom: 20px;
 }
 
-.form-header h3 { font-size: 24px; }
+.form-header h3 { font-size: 24px; margin-right: 12px; }
+
+.autosave-status {
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  margin-right: auto;
+  padding: 3px 8px;
+}
+
+.autosave-status.saving {
+  color: #999;
+}
+
+.autosave-status.saved {
+  color: #4caf50;
+}
+
+.autosave-status.error {
+  color: #f44336;
+}
+
+.draft-prompt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  background: #FFF3CD;
+  border: 2px solid #FFC107;
+  font-family: 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.draft-btn {
+  padding: 4px 12px;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  border: 2px solid #000;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.draft-btn.restore {
+  background: #FFC107;
+  color: #000;
+}
+
+.draft-btn.ignore {
+  background: #fff;
+  color: #000;
+}
 
 .close-btn {
   background: none;
