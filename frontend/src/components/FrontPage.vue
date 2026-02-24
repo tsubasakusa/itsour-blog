@@ -121,14 +121,30 @@ export default {
     const searchQuery = ref('')
     const selectedArticle = ref(null)
 
-    const loadArticles = async () => {
-      const res = await articleAPI.getAll({ published_only: true })
-      articles.value = res.data
+    const loadArticles = async (retries = 2) => {
+      try {
+        const res = await articleAPI.getAll({ published_only: true })
+        articles.value = res.data
+      } catch (e) {
+        if (retries > 0) {
+          await new Promise(r => setTimeout(r, 1000))
+          return loadArticles(retries - 1)
+        }
+        console.error('Failed to load articles', e)
+      }
     }
 
-    const loadFeatured = async () => {
-      const res = await articleAPI.getAll({ featured_only: true, limit: 4 })
-      featuredArticles.value = res.data
+    const loadFeatured = async (retries = 2) => {
+      try {
+        const res = await articleAPI.getAll({ featured_only: true, limit: 4 })
+        featuredArticles.value = res.data
+      } catch (e) {
+        if (retries > 0) {
+          await new Promise(r => setTimeout(r, 1000))
+          return loadFeatured(retries - 1)
+        }
+        console.error('Failed to load featured', e)
+      }
     }
 
     const handleSearch = async () => {

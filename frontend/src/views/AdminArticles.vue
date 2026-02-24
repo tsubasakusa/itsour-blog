@@ -349,25 +349,43 @@ export default {
     }
 
     // === Data Loading ===
-    const loadStats = async () => {
+    const loadStats = async (retries = 2) => {
       try {
         const res = await articleAPI.getStats()
         stats.value = res.data
-      } catch (e) { console.error(e) }
+      } catch (e) {
+        if (retries > 0) {
+          await new Promise(r => setTimeout(r, 1000))
+          return loadStats(retries - 1)
+        }
+        console.error(e)
+      }
     }
 
-    const loadArticles = async () => {
+    const loadArticles = async (retries = 2) => {
       try {
         const res = await articleAPI.getAll({ published_only: false })
         articles.value = res.data
-      } catch (e) { console.error(e) }
+      } catch (e) {
+        if (retries > 0) {
+          await new Promise(r => setTimeout(r, 1000))
+          return loadArticles(retries - 1)
+        }
+        console.error(e)
+      }
     }
 
-    const loadCategories = async () => {
+    const loadCategories = async (retries = 2) => {
       try {
         const res = await categoryAPI.getAll()
         categories.value = res.data
-      } catch (e) { console.error(e) }
+      } catch (e) {
+        if (retries > 0) {
+          await new Promise(r => setTimeout(r, 1000))
+          return loadCategories(retries - 1)
+        }
+        console.error(e)
+      }
     }
 
     const getCategoryName = (catId) => {
